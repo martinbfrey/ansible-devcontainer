@@ -2,8 +2,10 @@ FROM oraclelinux:9
 
 COPY kubernetes.repo /etc/yum.repos.d/kubernetes.repo
 
+# hadolint ignore=DL3041
 RUN dnf install -y oracle-epel-release-el9 \
     && rpm -ihv https://packages.microsoft.com/config/rhel/9/packages-microsoft-prod.rpm \
+    && yum-config-manager --add-repo https://rpm.releases.hashicorp.com/RHEL/hashicorp.repo \
     && dnf update --refresh -y \
     && dnf install -y \
     bash-completion sudo httpd-tools jq bind-utils \
@@ -26,6 +28,8 @@ RUN dnf install -y oracle-epel-release-el9 \
     powershell-lts \
     # Required for community.general.java_keystore
     java-25-openjdk \
+    # Hashicorp packer
+    packer \
     && dnf clean all && rm -rf /var/cache/dnf
 
 ARG PYTHONUNBUFFERED=1
@@ -38,7 +42,7 @@ RUN pip3.12 install --no-cache-dir \
     # Ansible
     paramiko==5.0.0 jinja2==3.1.6 pyvim==3.0.3 zabbix-api==0.5.6 units==0.07 \
     rich==15.0.0 textfsm==2.1.0 pysnmp==7.1.27 pysnmp-mibs==0.1.6 librouteros==4.1.1 \
-    kubernetes==36.0.2 openshift==0.13.2 \
+    kubernetes==36.0.2 openshift==0.13.2 omsdk==1.2.518 \
     ansible==13.8.0 \
     ansible-pylibssh==1.4.0 pyOpenSSL==26.3.0 \
     ansible-lint==26.4.0
@@ -78,3 +82,27 @@ COPY PowerCLI_Settings.xml /var/opt/VMware/PowerCLI/PowerCLI_Settings.xml
 # Install hadolint to check dockerfile
 RUN curl -L https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-linux-x86_64 -o /usr/local/bin/hadolint \
     && chmod 0755 /usr/local/bin/hadolint
+
+RUN /usr/local/bin/ansible-galaxy collection install dellemc.os9:==1.0.4 \
+        -p /usr/local/lib/python3.11/site-packages/ansible_collections \
+    && /usr/local/bin/ansible-galaxy collection install dellemc.os10:==1.2.7 \
+        -p /usr/local/lib/python3.11/site-packages/ansible_collections
+
+# Install idrac tools
+COPY idrac_install.sh /idrac_install.sh
+RUN chmod +x /idrac_install.sh \
+    && /idrac_install.sh \
+    && rm /idrac_install.sh
+
+# Patch dellemc openmanage collection and omsdk to support TLS1.3
+COPY dellemc-openmanage-idrac_services.py /usr/local/lib/python3.11/site-packages/ansible_collections/dellemc/openmanage/plugins/modules/dellemc_configure_idrac_services.py
+COPY omsdk-iDRAC.json /usr/local/lib/python3.11/site-packages/omdrivers/iDRAC/Config/iDRAC.json
+COPY omsdk-iDRACConfig.py /usr/local/lib/python3.11/site-packages/omdrivers/lifecycle/iDRAC/iDRACConfig.py
+COPY omsdk-iDRAC.py /usr/local/lib/python3.11/site-packages/omdrivers/enums/iDRAC/iDRAC.py
+COPY omsdk-iDRACEnums.py /usr/local/lib/python3.11/site-packages/omdrivers/enums/iDRAC/iDRACEnums.py
+
+# Install xmlrpc module
+ARG XMLRPC_VERSION=52b58aba29f41754dd57faaf17f9092ea278b535
+RUN mkdir -p /usr/share/ansible/plugins/modules && \
+    curl -L -o /usr/share/ansible/plugins/modules/xmlrpc_client.py \
+    https://gitlab.com/stemid/ansible-xmlrpc-client-module/-/raw/${XMLRPC_VERSION}/xmlrpc_client.py
